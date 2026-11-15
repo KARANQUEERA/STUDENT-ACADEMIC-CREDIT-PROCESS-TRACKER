@@ -3,20 +3,25 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <new>
 
 namespace {
 
 bool readLine(const char *prompt, char *buffer, int capacity)
 {
-    std::cout << prompt;
-    if (!std::fgets(buffer, capacity, stdin)) return false;
-    std::size_t length = std::strlen(buffer);
-    if (length > 0 && buffer[length - 1] == '\n') buffer[length - 1] = '\0';
-    else {
+    for (;;) {
+        std::cout << prompt;
+        if (!std::fgets(buffer, capacity, stdin)) return false;
+        std::size_t length = std::strlen(buffer);
+        if (length > 0 && buffer[length - 1] == '\n') {
+            buffer[length - 1] = '\0';
+            return true;
+        }
+        if (std::feof(stdin)) return true;
         int character;
         while ((character = std::getchar()) != '\n' && character != EOF) { }
+        std::cout << "Input is too long. Please try again.\n";
     }
-    return true;
 }
 
 bool readNumber(const char *prompt, int minimum, int maximum, int &result)
@@ -76,6 +81,89 @@ bool updateSemester(CourseCatalog &catalog, const char *specialization,
     return true;
 }
 
+bool runCourseSearch(const CourseCatalog &catalog)
+{
+    char query[160];
+    char specialization[100];
+    const char *type = 0;
+    const char *group = 0;
+    int semester, typeChoice, groupChoice, statusChoice;
+    int completionFilter = -1;
+
+    if (!readLine("Code/name contains (blank for any): ", query, sizeof(query)) ||
+        !readNumber("Semester (0 any, 1-8): ", 0, 8, semester) ||
+        !readLine("Specialization (blank for any): ", specialization,
+                  sizeof(specialization)) ||
+        !readNumber("Type (0 any, 1 MAIN, 2 ELECTIVE): ", 0, 2, typeChoice) ||
+        !readNumber("Group (0 any, 1 CHEMISTRY, 2 PHYSICS, 3 BOTH): ",
+                    0, 3, groupChoice) ||
+        !readNumber("Status (0 any, 1 completed, 2 not completed): ",
+                    0, 2, statusChoice)) return false;
+
+    if (typeChoice == 1) type = "MAIN";
+    else if (typeChoice == 2) type = "ELECTIVE";
+    if (groupChoice == 1) group = "CHEMISTRY";
+    else if (groupChoice == 2) group = "PHYSICS";
+    else if (groupChoice == 3) group = "BOTH";
+    if (statusChoice == 1) completionFilter = 1;
+    else if (statusChoice == 2) completionFilter = 0;
+
+    int matchCount = searchCoursesWithStatus(
+        catalog, query, semester, type,
+        specialization[0] ? specialization : 0, group,
+        completionFilter, 0, 0);
+    if (matchCount < 0) {
+        std::cout << "Search filters were invalid.\n";
+        return true;
+    }
+    if (matchCount == 0) {
+        std::cout << "No courses matched those search filters.\n";
+        return true;
+    }
+
+    const Course **results = new (std::nothrow) const Course*[matchCount];
+    if (results == 0) {
+        std::cout << "Not enough memory to display the search results.\n";
+        return true;
+    }
+    searchCoursesWithStatus(catalog, query, semester, type,
+                            specialization[0] ? specialization : 0, group,
+                            completionFilter, results, matchCount);
+    std::cout << "\nSearch results (" << matchCount << " courses):\n";
+    for (int index = 0; index < matchCount; ++index) {
+        const Course *course = results[index];
+        std::cout << "Semester " << course->getSemester() << " | "
+                  << course->getCode() << " | " << course->getName() << " | "
+                  << course->getType() << " | specialization "
+                  << course->getSpecialization() << " | group "
+                  << course->getGroup() << " | " << course->getCredits()
+                  << " credits | "
+                  << (course->isCompleted() ? "COMPLETED" : "NOT COMPLETED")
+                  << "\n";
+    }
+    delete [] results;
+    return true;
+}
+
+void runCourseTools(const CourseCatalog &catalog, const char *specialization,
+                    const char *group)
+{
+    int choice;
+    for (;;) {
+        std::cout << "\nAdditional course tools:\n"
+                  << "1. Search courses\n"
+                  << "2. Completed-credit report\n"
+                  << "0. Finish\n";
+        if (!readNumber("Choose an option: ", 0, 2, choice)) return;
+        if (choice == 0) return;
+        if (choice == 1) {
+            if (!runCourseSearch(catalog)) return;
+        } else {
+            printCompletedCreditReport(catalog, specialization, group);
+        }
+    }
+}
+
 bool askYesNo(const char *prompt, bool &answer)
 {
     char line[32];
@@ -116,8 +204,8 @@ int main()
     bool answer;
 
     std::cout << "STUDENT ACADEMIC CREDIT PROCESS TRACKER - C++ COMPONENTS\n";
-    std::cout << "Catalog: data/course_catalog_final_final_final.csv\n";
-    if (!catalog.loadCsv("data/course_catalog_final_final_final.csv")) {
+    std::cout << "Catalog: data/course_catalog_with_difficulty.csv\n";
+    if (!catalog.loadCsv("data/course_catalog_with_difficulty.csv")) {
         std::cerr << "Could not load the catalog or its headers do not match the expected fields.\n";
         return 1;
     }
@@ -204,6 +292,8 @@ int main()
     if (!askYesNo("Show a read-only what-if ranking for this semester (y/n)? ", whatIf)) return 1;
     if (whatIf) planner.showWhatIf(catalog, specialization, group,
                                    currentSemester, prerequisites);
+
+    runCourseTools(catalog, specialization, group);
 
     if (!completions.save("data/course_completion.csv", catalog)) {
         std::cerr << "Could not save completion changes to data/course_completion.csv.\n";
