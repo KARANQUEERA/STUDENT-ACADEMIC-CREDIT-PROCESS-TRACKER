@@ -6,129 +6,27 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
 from db import connect, initialize_database
+from prerequisite_validation import evaluate_prerequisites
+from recommendations import recommend_electives, recommend_for_semester
 
 
 VALID_STATUSES = {"COMPLETED", "IN_PROGRESS", "NOT_STARTED", "FAILED"}
 ROOT = Path(__file__).resolve().parent
+RECOMMENDATION_PREFERENCES = {
+	"easy going": "Easy-going",
+    "balanced": "Balanced",
+    "challenge me": "Challenge me",
+}
 
 
 def _prerequisite_result(connection, course_id):
-    """Check saved prerequisite edges and their transitive requirements."""
-    target = connection.execute(
-        "SELECT course_id, code FROM courses WHERE course_id = ?", (course_id,)
-    ).fetchone()
-    if target is None:
-        return None
+    """Evaluate only the reviewed rules; legacy edges are audit-only."""
+    return evaluate_prerequisites(connection, course_id, student_id="local")
 
-    direct_rows = connection.execute(
-        "SELECT required.course_id, required.code, "
-        "COALESCE(status.status, 'NOT_STARTED') AS status "
-        "FROM prerequisites edge "
-        "JOIN courses required ON required.course_id = edge.required_course_id "
-        "LEFT JOIN student_courses status ON status.course_id = required.course_id "
-        "AND status.student_id = ? WHERE edge.course_id = ? ORDER BY required.code",
-        ("local", course_id),
-    ).fetchall()
-    target_data = connection.execute(
-        "SELECT state FROM prerequisite_data WHERE course_id = ?", (course_id,)
-    ).fetchone()
-    if target_data is None or target_data["state"] == "UNRESOLVED":
-        return {"state": "UNRESOLVED", "eligible": False,
-                "required_courses": [dict(row) for row in direct_rows],
-                "incomplete_courses": [], "unresolved_courses": [target["code"]],
-                "cycle": []}
-    if target_data["state"] == "NO_PREREQUISITE":
-        if direct_rows:
-            return {"state": "UNRESOLVED", "eligible": False,
-                    "required_courses": [dict(row) for row in direct_rows],
-                    "incomplete_courses": [], "unresolved_courses": [target["code"]],
-                    "cycle": []}
-        return {"state": "NO_PREREQUISITE", "eligible": True,
-                "required_courses": [], "incomplete_courses": [],
-                "unresolved_courses": [], "cycle": []}
 
-    colors = {}
-    stack = []
-    incomplete = {}
-    unresolved = set()
-    cycle = []
-
-    def visit(current_id):
-        color = colors.get(current_id, 0)
-        if color == 1:
-            cycle_start = stack.index(current_id)
-            cycle.extend(stack[cycle_start:] + [current_id])
-            return
-        if color == 2:
-            return
-
-        colors[current_id] = 1
-        stack.append(current_id)
-        data = connection.execute(
-            "SELECT c.code, pd.state FROM courses c "
-            "LEFT JOIN prerequisite_data pd ON pd.course_id = c.course_id "
-            "WHERE c.course_id = ?", (current_id,)
-        ).fetchone()
-        if data is None or data["state"] in (None, "UNRESOLVED"):
-            if data is not None:
-                unresolved.add(data["code"])
-        elif data["state"] == "NO_PREREQUISITE":
-            has_edges = connection.execute(
-                "SELECT 1 FROM prerequisites WHERE course_id = ? LIMIT 1", (current_id,)
-            ).fetchone()
-            if has_edges:
-                unresolved.add(data["code"])
-        elif data["state"] == "VERIFIED":
-            requirements = connection.execute(
-                "SELECT required.course_id, required.code, "
-                "COALESCE(status.status, 'NOT_STARTED') AS status "
-                "FROM prerequisites edge "
-                "JOIN courses required ON required.course_id = edge.required_course_id "
-                "LEFT JOIN student_courses status ON status.course_id = required.course_id "
-                "AND status.student_id = ? WHERE edge.course_id = ? ORDER BY required.code",
-                ("local", current_id),
-            ).fetchall()
-            if not requirements:
-                unresolved.add(data["code"])
-            for requirement in requirements:
-                if requirement["status"] != "COMPLETED":
-                    incomplete[requirement["course_id"]] = {
-                        "course_id": requirement["course_id"],
-                        "code": requirement["code"],
-                        "status": requirement["status"],
-                    }
-                visit(requirement["course_id"])
-        else:
-            unresolved.add(data["code"])
-        stack.pop()
-        colors[current_id] = 2
-
-    visit(course_id)
-    cycle_codes = []
-    if cycle:
-        for cycle_course_id in cycle:
-            cycle_course = connection.execute(
-                "SELECT code FROM courses WHERE course_id = ?", (cycle_course_id,)
-            ).fetchone()
-            if cycle_course is not None:
-                cycle_codes.append(cycle_course["code"])
-
-    if cycle_codes:
-        state = "CYCLE_DETECTED"
-    elif unresolved:
-        state = "UNRESOLVED"
-    elif incomplete:
-        state = "INCOMPLETE"
-    else:
-        state = "SATISFIED"
-    return {
-        "state": state,
-        "eligible": state == "SATISFIED",
-        "required_courses": [dict(row) for row in direct_rows],
-        "incomplete_courses": list(incomplete.values()),
-        "unresolved_courses": sorted(unresolved),
-        "cycle": cycle_codes,
-    }
+def _credit_value_is_valid(value):
+    """Catalog credits are whole, non-negative numbers; reject other stored values."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def create_app(database_path=None):
@@ -163,16 +61,40 @@ def create_app(database_path=None):
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         query = (
             "SELECT c.course_id, c.semester, c.code, c.name, c.credits, c.course_type, "
+            "c.elective_category, "
             "c.specialization, c.course_group, COALESCE(sc.status, 'NOT_STARTED') AS status, "
             "pd.raw_value AS prerequisite_text, "
-            "pd.state AS prerequisite_state FROM courses c "
+            "pd.state AS prerequisite_state, prs.rule_status FROM courses c "
             "LEFT JOIN student_courses sc ON sc.course_id = c.course_id AND sc.student_id = ? "
             "LEFT JOIN prerequisite_data pd ON pd.course_id = c.course_id"
+            " LEFT JOIN prerequisite_rule_sets prs ON prs.course_id = c.course_id"
             + where + " ORDER BY c.semester, c.code, c.course_id"
         )
         with open_database() as connection:
             rows = connection.execute(query, ["local"] + values).fetchall()
         return jsonify([dict(row) for row in rows])
+
+    @app.get("/api/courses/<int:course_id>/profile")
+    def course_profile(course_id):
+        query = (
+            "SELECT c.course_id, c.semester, c.code AS course_code, c.course_type, "
+            "c.specialization, c.course_group, cp.course_name, cp.short_description, "
+            "cp.detailed_description, cp.learning_outcomes, cp.important_topics, "
+            "cp.technical_skills, cp.practical_applications, cp.primary_domain, "
+            "cp.secondary_domains, cp.programming_intensity, "
+            "cp.mathematical_intensity, cp.theory_practical_orientation, "
+            "cp.expected_background, cp.career_domains, cp.potential_career_roles, "
+            "cp.future_learning, cp.source_reference, cp.verification_status "
+            "FROM course_profiles cp JOIN courses c ON c.course_id = cp.course_id "
+            "WHERE cp.course_id = ?"
+        )
+        with open_database() as connection:
+            row = connection.execute(query, (course_id,)).fetchone()
+        if row is None:
+            return jsonify({"error": "course profile not found"}), 404
+        profile = dict(row)
+        profile["group"] = profile.pop("course_group")
+        return jsonify(profile)
 
     @app.put("/api/courses/<int:course_id>/status")
     def update_status(course_id):
@@ -222,6 +144,232 @@ def create_app(database_path=None):
         summary["graduation_target_credits"] = None
         return jsonify(summary)
 
+    @app.get("/api/subject-priority")
+    def subject_priority():
+        semester_value = request.args.get("semester", "")
+        if not semester_value.isdecimal() or not 1 <= int(semester_value) <= 8:
+            return jsonify({"error": "semester must be an integer from 1 to 8"}), 400
+
+        semester = int(semester_value)
+        with open_database() as connection:
+            rows = connection.execute(
+                "SELECT course_id, semester, code, name, credits, course_type, "
+                "elective_category FROM courses WHERE semester = ?",
+                (semester,),
+            ).fetchall()
+
+        valid_rows = []
+        invalid_rows = []
+        for row in rows:
+            course = dict(row)
+            credits = course["credits"]
+            if _credit_value_is_valid(credits):
+                valid_rows.append(course)
+            else:
+                course["credits"] = None
+                course["credit_data_valid"] = False
+                course["data_warning"] = "Credit value is missing or invalid; this course is not ranked."
+                invalid_rows.append(course)
+
+        valid_rows.sort(key=lambda course: (-course["credits"], course["code"], course["course_id"]))
+        total_credits = sum(course["credits"] for course in valid_rows)
+        previous_credits = None
+        current_rank = None
+        for index, course in enumerate(valid_rows):
+            if course["credits"] != previous_credits:
+                current_rank = index + 1
+                previous_credits = course["credits"]
+            course["rank"] = current_rank
+            course["credit_data_valid"] = True
+            course["credit_weight_percent"] = (
+                round(course["credits"] / total_credits * 100, 1)
+                if total_credits > 0 else None
+            )
+
+        for course in invalid_rows:
+            course["rank"] = None
+            course["credit_weight_percent"] = None
+
+        return jsonify({
+            "semester": semester,
+            "total_semester_credits": total_credits,
+            "invalid_credit_course_count": len(invalid_rows),
+            "courses": valid_rows + invalid_rows,
+        })
+
+    @app.get("/api/recommendations")
+    def elective_recommendations():
+        requested_preference = request.args.get("preference", "Balanced")
+        preference_key = " ".join(
+            requested_preference.strip().casefold().replace("-", " ").split()
+        )
+        preference = RECOMMENDATION_PREFERENCES.get(preference_key)
+        if preference is None:
+            return jsonify({
+                "error": "preference must be Easy-going, Balanced, or Challenge me"
+            }), 400
+
+        with open_database() as connection:
+            results = recommend_electives(
+                connection, student_id="local", preference=preference
+            )
+            elective_metadata = {
+                row["course_id"]: {
+                    "difficulty_level": row["difficulty_level"],
+                    "elective_category": row["elective_category"],
+                }
+                for row in connection.execute(
+                    "SELECT course_id, difficulty_level, elective_category FROM courses "
+                    "WHERE course_type = 'ELECTIVE'"
+                ).fetchall()
+            }
+
+        for recommendation in results:
+            metadata = elective_metadata.get(recommendation["course_id"], {})
+            recommendation["difficulty_level"] = metadata.get("difficulty_level")
+            recommendation["elective_category"] = metadata.get("elective_category")
+        return jsonify({"preference": preference, "recommendations": results})
+
+    @app.post("/api/recommendations/semester")
+    def semester_elective_recommendations():
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "request body must be a JSON object"}), 400
+
+        current_semester = body.get("current_semester")
+        target_semester = body.get("target_semester")
+        for name, value in (("current_semester", current_semester),
+                            ("target_semester", target_semester)):
+            if type(value) is not int or not 1 <= value <= 8:
+                return jsonify({"error": f"{name} must be an integer from 1 to 8"}), 400
+        if target_semester < current_semester:
+            return jsonify({
+                "error": "target_semester cannot be earlier than current_semester"
+            }), 400
+
+        specialization = body.get("specialization")
+        if not isinstance(specialization, str):
+            return jsonify({"error": "specialization must be CORE, CS, DS, or AIML"}), 400
+        preference_value = body.get("preference", "Balanced")
+        if not isinstance(preference_value, str):
+            return jsonify({
+                "error": "preference must be Easy-going, Balanced, or Challenge me"
+            }), 400
+        preference_key = " ".join(
+            preference_value.strip().casefold().replace("-", " ").split()
+        )
+        preference = RECOMMENDATION_PREFERENCES.get(preference_key)
+        if preference is None:
+            return jsonify({
+                "error": "preference must be Easy-going, Balanced, or Challenge me"
+            }), 400
+
+        previous_electives = body.get("previous_electives")
+        if previous_electives is not None:
+            if (not isinstance(previous_electives, list)
+                    or any(type(course_id) is not int or course_id < 1
+                           for course_id in previous_electives)):
+                return jsonify({
+                    "error": "previous_electives must be a list of positive catalog course IDs or null"
+                }), 400
+            if current_semester < 4:
+                if previous_electives:
+                    return jsonify({
+                        "error": "previous electives are not applicable before Semester 4"
+                    }), 400
+                # An empty list from an older client is equivalent to no question asked.
+                previous_electives = None
+
+        requested_scenarios = body.get("scenarios")
+        scenarios = None
+        if requested_scenarios is not None:
+            if not isinstance(requested_scenarios, list) or not requested_scenarios:
+                return jsonify({
+                    "error": "scenarios must be a non-empty list when supplied"
+                }), 400
+            scenarios = []
+            seen_scenario_ids = set()
+            for index, scenario in enumerate(requested_scenarios, start=1):
+                if not isinstance(scenario, dict):
+                    return jsonify({"error": f"scenario {index} must be a JSON object"}), 400
+                scenario_id = str(scenario.get("scenario_id") or f"scenario-{index}").strip()
+                label = str(scenario.get("label") or scenario_id).strip()
+                course_ids = scenario.get("course_ids", [])
+                if not scenario_id or scenario_id in seen_scenario_ids:
+                    return jsonify({
+                        "error": "scenario IDs must be non-empty and unique"
+                    }), 400
+                if (not isinstance(course_ids, list)
+                        or any(type(course_id) is not int or course_id < 1
+                               for course_id in course_ids)):
+                    return jsonify({
+                        "error": f"scenario '{scenario_id}' course_ids must be positive catalog course IDs"
+                    }), 400
+                seen_scenario_ids.add(scenario_id)
+                scenarios.append({
+                    "scenario_id": scenario_id,
+                    "label": label,
+                    "course_ids": course_ids,
+                })
+
+        engine_arguments = {
+            "current_semester": current_semester,
+            "specialization": specialization,
+            "target_semester": target_semester,
+            "previous_elective_course_ids": previous_electives,
+            "student_id": "local",
+            "preference": preference,
+        }
+        with open_database() as connection:
+            try:
+                if scenarios is None:
+                    result = recommend_for_semester(
+                        connection, **engine_arguments
+                    )
+                else:
+                    scenario_results = []
+                    response_base = None
+                    for scenario in scenarios:
+                        try:
+                            scenario_result = recommend_for_semester(
+                                connection,
+                                planned_scenarios=[scenario],
+                                **engine_arguments,
+                            )
+                        except ValueError as error:
+                            return jsonify({
+                                "error": f"Scenario '{scenario['scenario_id']}' is invalid: {error}"
+                            }), 400
+                        if response_base is None:
+                            response_base = {
+                                key: value for key, value in scenario_result.items()
+                                if key != "scenarios"
+                            }
+                        scenario_results.extend(scenario_result["scenarios"])
+                    result = response_base
+                    result["scenarios"] = scenario_results
+            except ValueError as error:
+                return jsonify({"error": str(error)}), 400
+
+            elective_metadata = {
+                row["course_id"]: {
+                    "difficulty_level": row["difficulty_level"],
+                    "elective_category": row["elective_category"],
+                }
+                for row in connection.execute(
+                    "SELECT course_id, difficulty_level, elective_category FROM courses "
+                    "WHERE course_type = 'ELECTIVE'"
+                ).fetchall()
+            }
+
+        for scenario in result["scenarios"]:
+            for recommendation in scenario["recommendations"]:
+                metadata = elective_metadata.get(recommendation["course_id"], {})
+                recommendation["difficulty_level"] = metadata.get("difficulty_level")
+                recommendation["elective_category"] = metadata.get("elective_category")
+        result["preference"] = preference
+        return jsonify(result)
+
     @app.get("/api/courses/<int:course_id>/prerequisites")
     def check_prerequisites(course_id):
         with open_database() as connection:
@@ -244,14 +392,46 @@ def create_app(database_path=None):
         courses = []
         totals = {"total_credits": 0, "compulsory_credits": 0,
                   "elective_option_credits": 0, "other_credits": 0}
+        elective_semesters = {}
         with open_database() as connection:
             for course_id in course_ids:
                 course = connection.execute(
-                    "SELECT course_id, semester, code, name, credits, course_type "
+                    "SELECT course_id, semester, code, name, credits, course_type, "
+                    "elective_category "
                     "FROM courses WHERE course_id = ?", (course_id,)
                 ).fetchone()
                 if course is None:
                     return jsonify({"error": f"course {course_id} was not found"}), 404
+                if course["course_type"] == "ELECTIVE":
+                    semester = course["semester"]
+                    if semester == 8:
+                        category = course["elective_category"]
+                        if category not in {"PEC", "OEC"}:
+                            return jsonify({
+                                "error": (
+                                    f"Semester 8 elective {course['code']} has no PEC/OEC "
+                                    "category and cannot be added to a plan yet."
+                                )
+                            }), 400
+                        occupied_categories = elective_semesters.setdefault(semester, set())
+                        if category in occupied_categories:
+                            return jsonify({
+                                "error": (
+                                    f"Only one {category} elective may be selected "
+                                    "for Semester 8."
+                                )
+                            }), 400
+                        occupied_categories.add(category)
+                    else:
+                        occupied_categories = elective_semesters.setdefault(semester, set())
+                        if occupied_categories:
+                            return jsonify({
+                                "error": (
+                                    "Only one elective may be selected per semester "
+                                    f"(semester {semester})."
+                                )
+                            }), 400
+                        occupied_categories.add("ELECTIVE")
                 course_data = dict(course)
                 totals["total_credits"] += course["credits"]
                 if course["course_type"] == "MAIN":
