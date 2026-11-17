@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>Student Credit Tracker</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Student Credit Tracker home">
+        <span class="brand-mark" aria-hidden="true">CT</span>
+        <span>Credit Tracker</span>
+      </a>
+      <span class="phase-badge"><span class="status-dot"></span> Academic progress</span>
+    </header>
+
+    <main class="page">
+      <section class="welcome" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">STUDENT ACADEMIC CREDIT PROCESS TRACKER</p>
+          <h1 id="page-title">Your academic progress</h1>
+          <p class="welcome-copy">Review course status and earned credits in one place.</p>
+        </div>
+        <div class="welcome-note">
+          <span class="note-icon" aria-hidden="true">i</span>
+          <span>Only imported course data is shown. Graduation targets are not assumed.</span>
+        </div>
+      </section>
+
+      <section class="summary" id="summary" aria-label="Credit and course summary" aria-live="polite">
+        <div class="summary-loading">Loading your summary…</div>
+      </section>
+
+      <section class="priority-panel" aria-labelledby="priority-heading">
+        <div class="panel-heading priority-heading">
+          <div>
+            <p class="eyebrow">CREDIT WEIGHT</p>
+            <h2 id="priority-heading">Subject priority</h2>
+            <p class="priority-copy">Compare subjects by their share of all valid credits listed for a semester. Elective rows are catalog options, not a claim that every option is taken. Grade points also affect SGPA; this is not a grade or SGPA prediction.</p>
+          </div>
+          <label class="priority-semester" for="priority-semester">
+            <span class="field-label">Semester</span>
+            <select id="priority-semester"><option value="">Choose semester</option></select>
+          </label>
+        </div>
+        <p id="priority-message" class="priority-message" role="status" aria-live="polite">Choose a semester to view subject priority.</p>
+        <div id="priority-table-wrap" class="priority-table-wrap" hidden>
+          <table class="priority-table">
+            <thead>
+              <tr><th scope="col">Rank</th><th scope="col">Course</th><th scope="col">Subject</th><th scope="col">Type</th><th scope="col">Credits</th><th scope="col">Credit weight</th></tr>
+            </thead>
+            <tbody id="priority-courses"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="recommendations-panel" aria-labelledby="recommendations-heading">
+        <div class="recommendations-heading">
+          <div>
+            <p class="eyebrow">PERSONALIZED ELECTIVES</p>
+            <h2 id="recommendations-heading">Elective recommendations</h2>
+            <p class="recommendations-copy">Choose your study context and compare elective difficulty for one semester at a time.</p>
+          </div>
+        </div>
+        <div class="recommendation-wizard">
+          <ol id="recommendation-progress" class="recommendation-progress" aria-label="Recommendation steps"></ol>
+          <p id="recommendation-message" class="recommendation-message" role="status" aria-live="polite">Loading elective choices…</p>
+          <div id="recommendation-step" class="recommendation-step"></div>
+          <div class="recommendation-actions">
+            <button id="recommendation-back" class="secondary-button" type="button" hidden>Back</button>
+            <span class="action-spacer"></span>
+            <button id="recommendation-continue" type="button">Continue</button>
+            <button id="recommendation-generate" type="button" hidden>Generate recommendations</button>
+          </div>
+        </div>
+        <section id="recommendation-results" class="recommendation-results" aria-live="polite" hidden>
+          <div class="results-heading">
+            <div>
+              <p class="eyebrow">TARGET SEMESTER</p>
+              <h3 id="recommendation-results-title">Recommendations</h3>
+            </div>
+            <span id="recommendation-results-preference" class="catalog-count"></span>
+          </div>
+          <div id="recommendation-scenarios" class="recommendation-scenarios"></div>
+        </section>
+      </section>
+
+      <section class="catalog-panel" aria-labelledby="catalog-heading">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">COURSEWORK</p>
+            <h2 id="catalog-heading">Course catalog</h2>
+          </div>
+          <span class="catalog-count" id="catalog-count">— courses</span>
+        </div>
+
+        <form class="filters" id="filters" role="search">
+          <label class="search-field" for="search">
+            <span class="field-label">Search courses</span>
+            <span class="input-wrap"><span class="search-icon" aria-hidden="true"></span>
+              <input id="search" type="search" placeholder="Course code or name" autocomplete="off">
+            </span>
+          </label>
+          <label for="semester">
+            <span class="field-label">Semester</span>
+            <select id="semester"><option value="">All semesters</option></select>
+          </label>
+          <label for="type">
+            <span class="field-label">Course type</span>
+            <select id="type"><option value="">All types</option><option value="MAIN">Main</option><option value="ELECTIVE">Elective</option></select>
+          </label>
+          <label for="specialization">
+            <span class="field-label">Specialization</span>
+            <input id="specialization" type="search" placeholder="Exact catalog value" autocomplete="off">
+          </label>
+          <label for="group">
+            <span class="field-label">Group</span>
+            <input id="group" type="search" placeholder="Exact catalog value" autocomplete="off">
+          </label>
+        </form>
+
+        <div class="table-toolbar">
+          <p id="message" class="message" aria-live="polite">Loading courses…</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th scope="col">Course</th><th scope="col">Semester</th><th scope="col">Credits</th><th scope="col">Type</th><th scope="col">Status</th><th scope="col">Prerequisite information</th><th scope="col">Details</th><th scope="col">Plan</th></tr>
+            </thead>
+            <tbody id="courses"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="planner-panel" aria-labelledby="planner-heading">
+        <div class="planner-copy">
+          <p class="eyebrow">HYPOTHETICAL ONLY</p>
+          <h2 id="planner-heading">What-if planner</h2>
+          <p>Select courses in the catalog to preview their combined credits. This will not change saved course statuses.</p>
+        </div>
+        <div class="planner-action">
+          <span id="planner-selection-count" class="planner-selection-count">0 courses selected</span>
+          <button id="preview-plan" type="button" disabled>Preview plan</button>
+        </div>
+        <div id="planner-result" class="planner-result" aria-live="polite" hidden></div>
+      </section>
+      <dialog id="course-profile-dialog" class="course-profile-dialog" aria-labelledby="course-profile-title">
+        <div class="course-profile-shell">
+          <header class="course-profile-header">
+            <div>
+              <p class="eyebrow">COURSE PROFILE</p>
+              <h2 id="course-profile-title">Course details</h2>
+            </div>
+            <button id="close-course-profile" class="secondary-button" type="button" aria-label="Close course details">Close</button>
+          </header>
+          <div id="course-profile-content" class="course-profile-content" aria-live="polite"></div>
+        </div>
+      </dialog>
+      <footer class="page-footer">Your saved progress is based on the course data available to this application.</footer>
+    </main>
+  </div>
+</body>
+</html>
