@@ -1,88 +1,107 @@
-# Prerequisites
-*.d
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+ENV/
 
-# Compiled Object files
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+.flaskenv
+*.local
+*.env
+credentials.json
+secrets.json
+*.pem
+*.key
+id_rsa
+id_ed25519
+
+# SQLite databases and sidecar/journal files
+web_app/instance/
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Private course completion/progress data (catalog/profile CSVs remain visible)
+/data/course_completion.csv
+# Retain intentional catalogs; exclude explicitly named catalog backup copies.
+/data/*_backup.csv
+/data/*.before-*.csv
+
+# Compiled programs and build artifacts
+build/
+dist/
+*.exe
+*.obj
+*.o
+*.pdb
+*.ilk
+*.lib
+*.exp
+*.dll
+*.so
+
+# Local backups and copied project/data snapshots
+/backups/
+/phase5_pre_edit_backup_*/
+
+# Temporary test output
+*.tmp
+*.log
+*.out
+*.bak
+*.swp
+/tmp/
+/temp/
+
+# Local MSVC verification workspace: keep probes, fixtures, copies, and outputs out of Git.
+/phase5_msvc_verification/
+# Retain specific generated-output exclusions for the verification workspace.
+/phase5_msvc_verification/c_app_run/
+/phase5_msvc_verification/c_quote_run/
+/phase5_msvc_verification/cpp_app_run/
+/phase5_msvc_verification/cpp_quote_run/
+/phase5_msvc_verification/c/
+/phase5_msvc_verification/cpp/
+/phase5_msvc_verification/harness/*.obj
+/phase5_msvc_verification/harness/*_test.csv
+
+# Additional common build outputs and developer-local files
+*.d
 *.slo
 *.lo
-*.o
-*.obj
-
-# Precompiled Headers
 *.gch
 *.pch
-
-# Linker files
-*.ilk
-
-# Debugger Files
-*.pdb
-
-# Compiled Dynamic libraries
-*.so
 *.dylib
-*.dll
 *.so.*
-
-# Fortran module files
-*.mod
-*.smod
-
-# Compiled Static libraries
 *.lai
 *.la
 *.a
-*.lib
-
-# Executables
-*.exe
-*.out
 *.app
-
-# Build directories
-build/
+*.dwo
 Build/
 build-*/
-
-# CMake generated files
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
 Makefile
 install_manifest.txt
 compile_commands.json
-
-# Temporary files
-*.tmp
-*.log
-*.bak
-*.swp
-
-# vcpkg
 vcpkg_installed/
-
-# debug information files
-*.dwo
-
-# test output & cache
 Testing/
 .cache/
-
-# Python-generated files
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-env/
-
-# Local databases
-*.sqlite3
-*.sqlite
-*.db
-
-# Environment variables and secrets
-.env
-.env.*
-
-# IDE settings
 .vscode/
 .idea/
